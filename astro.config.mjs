@@ -9,6 +9,7 @@ export default defineConfig({
 			title: 'My Docs',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/withastro/starlight' }],
 			sidebar: [
+				{ label: 'Chord library', slug: 'chords' },
 				{
 					label: 'Guides',
 					items: [

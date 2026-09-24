@@ -1,0 +1,158 @@
+---
+// Draws a chord chart as an SVG. Usable on its own in any lesson:
+//   <ChordDiagram name="G" frets="320003" fingers="210003" />
+// See src/data/chords.ts for the frets/fingers notation.
+
+interface Props {
+	name?: string;
+	frets: string;
+	fingers?: string;
+}
+
+const { name, frets, fingers = '' } = Astro.props;
+
+const STRINGS = 6;
+const FRETS_SHOWN = 4;
+const STRING_NAMES = ['low E', 'A', 'D', 'G', 'B', 'high e'];
+
+const split = (s: string) => (s.trim().includes(' ') ? s.trim().split(/\s+/) : s.trim().split(''));
+const isMuted = (s: string) => s.toLowerCase() === 'x';
+
+const fretList = split(frets).map((f) => (isMuted(f) ? null : Number(f)));
+const fingerList = fingers ? split(fingers).map((f) => (isMuted(f) || f === '0' ? null : f)) : [];
+
+const label = name ? `"${name}"` : `"${frets}"`;
+if (fretList.length !== STRINGS || fretList.some((f) => f !== null && !Number.isInteger(f))) {
+	throw new Error(`ChordDiagram ${label}: frets must list 6 strings, got "${frets}"`);
+}
+if (fingers && fingerList.length !== STRINGS) {
+	throw new Error(`ChordDiagram ${label}: fingers must list 6 strings, got "${fingers}"`);
+}
+
+const pressed = fretList.filter((f): f is number => f !== null && f > 0);
+const maxFret = Math.max(0, ...pressed);
+const baseFret = maxFret <= FRETS_SHOWN ? 1 : Math.min(...pressed);
+if (maxFret - baseFret >= FRETS_SHOWN) {
+	throw new Error(`ChordDiagram ${label}: shape spans more than ${FRETS_SHOWN} frets`);
+}
+
+// A finger on two or more strings at the same fret is a barre.
+const barres: { fret: number; from: number; to: number; finger: string }[] = [];
+for (const finger of new Set(fingerList.filter((f): f is string => f !== null))) {
+	const strings = fingerList.flatMap((f, i) => (f === finger ? [i] : []));
+	const fretsUsed = new Set(strings.map((i) => fretList[i]));
+	if (strings.length > 1 && fretsUsed.size === 1) {
+		barres.push({ fret: fretList[strings[0]]!, from: strings[0], to: strings.at(-1)!, finger });
+	}
+}
+const inBarre = (i: number) => barres.some((b) => fretList[i] === b.fret && fingerList[i] === b.finger);
+
+// Layout
+const LEFT = 22;
+const GAP = 16;
+const TOP = 28;
+const FRET_H = 18;
+const WIDTH = LEFT * 2 + GAP * (STRINGS - 1) - 12;
+const HEIGHT = TOP + FRET_H * FRETS_SHOWN + 6;
+const sx = (i: number) => LEFT + i * GAP;
+const fy = (fret: number) => TOP + (fret - baseFret + 0.5) * FRET_H;
+const gridBottom = TOP + FRET_H * FRETS_SHOWN;
+
+const description = fretList
+	.map((f, i) => `${STRING_NAMES[i]} ${f === null ? 'muted' : f === 0 ? 'open' : `fret ${f}`}`)
+	.join(', ');
+const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
+---
+
+<figure class="chord-diagram">
+	<svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={ariaLabel}>
+		{/* frets */}
+		{Array.from({ length: FRETS_SHOWN + 1 }, (_, n) => (
+			<line x1={sx(0)} x2={sx(STRINGS - 1)} y1={TOP + n * FRET_H} y2={TOP + n * FRET_H} class="line" />
+		))}
+		{baseFret === 1 ? (
+			<rect x={sx(0) - 1} y={TOP - 4} width={GAP * (STRINGS - 1) + 2} height="4" class="nut" />
+		) : (
+			<text x={sx(0) - 7} y={TOP + FRET_H / 2 + 3.5} text-anchor="end" class="base-fret">{baseFret}fr</text>
+		)}
+
+		{/* strings */}
+		{fretList.map((_, i) => <line x1={sx(i)} x2={sx(i)} y1={TOP} y2={gridBottom} class="line" />)}
+
+		{/* open and muted markers */}
+		{fretList.map((f, i) =>
+			f === 0 ? (
+				<circle cx={sx(i)} cy={TOP - 11} r="3.8" class="open" />
+			) : f === null ? (
+				<path d={`M${sx(i) - 3.5} ${TOP - 14.5}l7 7m0 -7l-7 7`} class="muted" />
+			) : null,
+		)}
+
+		{/* barres */}
+		{barres.map((b) => (
+			<g>
+				<rect x={sx(b.from) - 6.5} y={fy(b.fret) - 6.5} width={sx(b.to) - sx(b.from) + 13} height="13" rx="6.5" class="dot" />
+				<text x={(sx(b.from) + sx(b.to)) / 2} y={fy(b.fret) + 3.2} text-anchor="middle" class="finger">{b.finger}</text>
+			</g>
+		))}
+
+		{/* fretted notes */}
+		{fretList.map((f, i) =>
+			f && !inBarre(i) ? (
+				<g>
+					<circle cx={sx(i)} cy={fy(f)} r="6.5" class="dot" />
+					{fingerList[i] && <text x={sx(i)} y={fy(f) + 3.2} text-anchor="middle" class="finger">{fingerList[i]}</text>}
+				</g>
+			) : null,
+		)}
+	</svg>
+	{name && <figcaption>{name}</figcaption>}
+</figure>
+
+<style>
+	.chord-diagram {
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.25rem;
+		color: var(--sl-color-white);
+	}
+	svg {
+		width: 100%;
+		max-width: 9rem;
+		height: auto;
+		overflow: visible;
+	}
+	.line {
+		stroke: var(--sl-color-gray-3);
+		stroke-width: 1;
+	}
+	.nut {
+		fill: currentColor;
+	}
+	.open,
+	.muted {
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.4;
+	}
+	.dot {
+		fill: var(--sl-color-accent-high);
+	}
+	.finger {
+		fill: var(--sl-color-black);
+		font-size: 9px;
+		font-weight: 700;
+		font-family: var(--sl-font-system);
+	}
+	.base-fret {
+		fill: currentColor;
+		font-size: 9px;
+		font-family: var(--sl-font-system);
+	}
+	figcaption {
+		font-weight: 600;
+		font-size: var(--sl-text-lg);
+	}
+</style>
