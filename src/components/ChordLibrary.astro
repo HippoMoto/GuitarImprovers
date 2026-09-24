@@ -3,8 +3,19 @@
 // Sharp/flat chords are hidden until the "Sharps & flats" toggle is on.
 // Filters are also kept in the URL (e.g. ?type=major,seventh&roots=E,G,A&accidentals=on)
 // so a filtered view can be bookmarked or shared.
+//
+// With `selectable`, chords become toggle buttons. The picked chords (in the
+// order they were picked) are kept in the URL as ?deck=G,C,D, stored on the
+// root element as data-selection (JSON), and announced with a bubbling
+// `chord-selection` event whose detail is the list of chord names.
 import ChordDiagram from './ChordDiagram.astro';
 import { chords, roots, isAccidental } from '../data/chords';
+
+interface Props {
+	selectable?: boolean;
+}
+
+const { selectable = false } = Astro.props;
 
 const types = [
 	{ value: 'major', label: 'Major' },
@@ -48,14 +59,31 @@ const types = [
 			<p aria-live="polite" data-count>
 				Showing {chords.filter((c) => !isAccidental(c.root)).length} of {chords.length} chords
 			</p>
-			<button type="button" data-clear>Clear filters</button>
+			<div class="actions">
+				{selectable && <button type="button" data-select-shown>Select all shown</button>}
+				{selectable && <button type="button" data-clear-selection>Clear selection</button>}
+				<button type="button" data-clear>Clear filters</button>
+			</div>
 		</div>
 	</div>
 
-	<ul class="grid">
+	<ul class:list={['grid', { selectable }]}>
 		{chords.map((c) => (
-			<li data-root={c.root} data-quality={c.quality} data-accidental={isAccidental(c.root)} hidden={isAccidental(c.root)}>
-				<ChordDiagram name={c.name} frets={c.frets} fingers={c.fingers} />
+			<li
+				data-chord-id={c.name}
+				data-root={c.root}
+				data-quality={c.quality}
+				data-accidental={isAccidental(c.root)}
+				hidden={isAccidental(c.root)}
+			>
+				{selectable ? (
+					<button type="button" class="pick" aria-pressed="false">
+						<ChordDiagram as="span" name={c.name} frets={c.frets} fingers={c.fingers} />
+						<span class="order" aria-hidden="true"></span>
+					</button>
+				) : (
+					<ChordDiagram name={c.name} frets={c.frets} fingers={c.fingers} />
+				)}
 			</li>
 		))}
 	</ul>
@@ -71,6 +99,28 @@ const types = [
 		const count = lib.querySelector<HTMLElement>('[data-count]')!;
 		const empty = lib.querySelector<HTMLElement>('[data-empty]')!;
 		const isAccidental = (el: HTMLElement) => el.dataset.accidental === 'true';
+		const selectable = items.some((item) => item.querySelector('.pick'));
+		let selection: string[] = [];
+
+		const setParam = (key: string, values: string[]) => {
+			const url = new URL(location.href);
+			if (values.length) url.searchParams.set(key, values.join(','));
+			else url.searchParams.delete(key);
+			history.replaceState(null, '', url);
+		};
+
+		const renderSelection = () => {
+			for (const item of items) {
+				const pick = item.querySelector<HTMLButtonElement>('.pick');
+				if (!pick) continue;
+				const position = selection.indexOf(item.dataset.chordId!);
+				pick.setAttribute('aria-pressed', String(position >= 0));
+				pick.querySelector('.order')!.textContent = position >= 0 ? String(position + 1) : '';
+			}
+			setParam('deck', selection);
+			lib.dataset.selection = JSON.stringify(selection);
+			lib.dispatchEvent(new CustomEvent('chord-selection', { detail: [...selection], bubbles: true }));
+		};
 
 		const update = () => {
 			const selectedTypes = typeInputs.filter((i) => i.checked).map((i) => i.value);
@@ -98,14 +148,9 @@ const types = [
 				shown === items.length ? `Showing all ${items.length} chords` : `Showing ${shown} of ${items.length} chords`;
 			empty.hidden = shown > 0;
 
-			const url = new URL(location.href);
-			if (selectedTypes.length) url.searchParams.set('type', selectedTypes.join(','));
-			else url.searchParams.delete('type');
-			if (selectedRoots.length) url.searchParams.set('roots', selectedRoots.join(','));
-			else url.searchParams.delete('roots');
-			if (showAccidentals) url.searchParams.set('accidentals', 'on');
-			else url.searchParams.delete('accidentals');
-			history.replaceState(null, '', url);
+			setParam('type', selectedTypes);
+			setParam('roots', selectedRoots);
+			setParam('accidentals', showAccidentals ? ['on'] : []);
 		};
 
 		// Restore filters from the URL.
@@ -115,6 +160,8 @@ const types = [
 		for (const input of typeInputs) input.checked = typesParam.includes(input.value);
 		for (const input of rootInputs) input.checked = rootsParam.includes(input.value);
 		accidentalsInput.checked = params.get('accidentals') === 'on';
+		const known = new Set(items.map((item) => item.dataset.chordId!));
+		if (selectable) selection = (params.get('deck')?.split(',') ?? []).filter((id) => known.has(id));
 
 		lib.addEventListener('change', update);
 		lib.querySelector('[data-clear]')!.addEventListener('click', () => {
@@ -123,7 +170,28 @@ const types = [
 			accidentalsInput.checked = false;
 			update();
 		});
+
+		if (selectable) {
+			for (const item of items) {
+				item.querySelector('.pick')!.addEventListener('click', () => {
+					const id = item.dataset.chordId!;
+					selection = selection.includes(id) ? selection.filter((s) => s !== id) : [...selection, id];
+					renderSelection();
+				});
+			}
+			lib.querySelector('[data-select-shown]')!.addEventListener('click', () => {
+				const shown = items.filter((item) => !item.hidden).map((item) => item.dataset.chordId!);
+				selection = [...selection, ...shown.filter((id) => !selection.includes(id))];
+				renderSelection();
+			});
+			lib.querySelector('[data-clear-selection]')!.addEventListener('click', () => {
+				selection = [];
+				renderSelection();
+			});
+		}
+
 		update();
+		if (selectable) renderSelection();
 	}
 </script>
 
@@ -214,6 +282,11 @@ const types = [
 		color: var(--sl-color-gray-2);
 		font-size: var(--sl-text-sm);
 	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
 	.status button {
 		font: inherit;
 		font-size: var(--sl-text-sm);
@@ -241,6 +314,51 @@ const types = [
 		border-radius: 0.5rem;
 	}
 	.grid li[hidden] {
+		display: none;
+	}
+	.grid.selectable li {
+		padding: 0;
+		border: 0;
+	}
+	.pick {
+		position: relative;
+		width: 100%;
+		height: 100%;
+		padding: 0.75rem 0.5rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		cursor: pointer;
+	}
+	.pick:hover {
+		border-color: var(--sl-color-accent);
+	}
+	.pick:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 2px;
+	}
+	.pick[aria-pressed='true'] {
+		border: 2px solid var(--sl-color-accent);
+		padding: calc(0.75rem - 1px) calc(0.5rem - 1px);
+		background: var(--sl-color-accent-low);
+	}
+	.order {
+		position: absolute;
+		top: 0.35rem;
+		right: 0.35rem;
+		min-width: 1.4rem;
+		height: 1.4rem;
+		padding-inline: 0.3rem;
+		border-radius: 999px;
+		font-size: var(--sl-text-xs);
+		font-weight: 700;
+		line-height: 1.4rem;
+		background: var(--sl-color-accent);
+		color: var(--sl-color-black);
+	}
+	.order:empty {
 		display: none;
 	}
 	.empty {

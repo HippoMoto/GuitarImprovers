@@ -10,6 +10,7 @@ export default defineConfig({
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/withastro/starlight' }],
 			sidebar: [
 				{ label: 'Chord library', slug: 'chords' },
+				{ label: 'Chord flashcards', slug: 'flashcards' },
 				{
 					label: 'Guides',
 					items: [

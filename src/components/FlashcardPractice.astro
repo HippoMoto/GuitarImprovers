@@ -1,0 +1,361 @@
+---
+// Chord flashcards: pick chords from the library below, then practise them
+// against a 4/4 metronome. The card moves to the next chord on every beat 1.
+import ChordLibrary from './ChordLibrary.astro';
+
+const MIN_BPM = 40;
+const MAX_BPM = 200;
+const DEFAULT_BPM = 80;
+---
+
+<div class="flashcards not-content" data-flashcards>
+	<section class="player" aria-label="Flashcard player">
+		<p class="placeholder" data-placeholder>Pick chords below to build your flashcard deck.</p>
+
+		<div class="cards" data-cards hidden>
+			<div class="card now">
+				<p class="card-label">Now</p>
+				<div class="card-diagram" data-now aria-live="polite"></div>
+			</div>
+			<div class="card next">
+				<p class="card-label">Next</p>
+				<div class="card-diagram" data-next></div>
+			</div>
+		</div>
+
+		<div class="beats" aria-hidden="true">
+			{[1, 2, 3, 4].map((n) => <span class="beat" data-beat={n - 1}>{n}</span>)}
+		</div>
+
+		<div class="transport">
+			<button type="button" class="play" data-toggle disabled>Start</button>
+			<div class="tempo">
+				<button type="button" class="step" data-slower aria-label="Slower">−</button>
+				<input
+					type="range"
+					min={MIN_BPM}
+					max={MAX_BPM}
+					value={DEFAULT_BPM}
+					data-bpm
+					aria-label="Tempo in beats per minute"
+				/>
+				<button type="button" class="step" data-faster aria-label="Faster">+</button>
+				<output data-bpm-value>{DEFAULT_BPM} BPM</output>
+			</div>
+		</div>
+
+		<p class="deck" data-deck></p>
+	</section>
+
+	<h2 class="pick-heading">Choose your chords</h2>
+	<p class="pick-help">Filter the list, then click chords to add them to your deck. They play in the order you pick them.</p>
+	<ChordLibrary selectable />
+</div>
+
+<script>
+	const BEATS_PER_BAR = 4;
+	const TEMPO_STEP = 5;
+	const LOOKAHEAD_MS = 25;
+	const SCHEDULE_AHEAD_S = 0.1;
+
+	const root = document.querySelector<HTMLElement>('[data-flashcards]');
+	if (root) {
+		const lib = root.querySelector<HTMLElement>('[data-chord-library]')!;
+		const placeholder = root.querySelector<HTMLElement>('[data-placeholder]')!;
+		const cards = root.querySelector<HTMLElement>('[data-cards]')!;
+		const nowSlot = root.querySelector<HTMLElement>('[data-now]')!;
+		const nextSlot = root.querySelector<HTMLElement>('[data-next]')!;
+		const beats = [...root.querySelectorAll<HTMLElement>('.beat')];
+		const toggle = root.querySelector<HTMLButtonElement>('[data-toggle]')!;
+		const bpmInput = root.querySelector<HTMLInputElement>('[data-bpm]')!;
+		const bpmValue = root.querySelector<HTMLOutputElement>('[data-bpm-value]')!;
+		const deckText = root.querySelector<HTMLElement>('[data-deck]')!;
+
+		let deck: string[] = JSON.parse(lib.dataset.selection ?? '[]');
+		let cardIndex = 0;
+
+		// --- Cards -----------------------------------------------------------
+
+		const diagramFor = (id: string) =>
+			lib.querySelector(`li[data-chord-id="${CSS.escape(id)}"] .chord-diagram`)!.cloneNode(true);
+
+		const showCard = (index: number) => {
+			const n = deck.length;
+			placeholder.hidden = n > 0;
+			cards.hidden = n === 0;
+			if (n === 0) return;
+			nowSlot.replaceChildren(diagramFor(deck[index % n]));
+			nextSlot.replaceChildren(diagramFor(deck[(index + 1) % n]));
+		};
+
+		const renderDeck = () => {
+			deckText.textContent = deck.length ? `Deck (${deck.length}): ${deck.join(' → ')}` : '';
+			toggle.disabled = deck.length === 0 && !playing;
+		};
+
+		lib.addEventListener('chord-selection', (event) => {
+			deck = (event as CustomEvent<string[]>).detail;
+			if (deck.length === 0 && playing) stop();
+			if (!playing) cardIndex = 0;
+			showCard(cardIndex);
+			renderDeck();
+		});
+
+		// --- Metronome -------------------------------------------------------
+		// Clicks are scheduled slightly ahead on the Web Audio clock so the
+		// timing stays steady. The display catches up on each animation frame,
+		// and on each scheduler tick for when frames are paused (hidden tab).
+
+		let audio: AudioContext | undefined;
+		let playing = false;
+		let timer: number | undefined;
+		let nextBeatTime = 0;
+		let beat = 0;
+		let bar = 0;
+		let queue: { time: number; beat: number; bar: number }[] = [];
+
+		const bpm = () => Number(bpmInput.value);
+
+		const click = (time: number, accent: boolean) => {
+			const osc = audio!.createOscillator();
+			const gain = audio!.createGain();
+			osc.frequency.value = accent ? 1500 : 1000;
+			gain.gain.setValueAtTime(0.0001, time);
+			gain.gain.exponentialRampToValueAtTime(accent ? 0.6 : 0.3, time + 0.002);
+			gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.06);
+			osc.connect(gain).connect(audio!.destination);
+			osc.start(time);
+			osc.stop(time + 0.07);
+		};
+
+		const schedule = () => {
+			while (nextBeatTime < audio!.currentTime + SCHEDULE_AHEAD_S) {
+				click(nextBeatTime, beat === 0);
+				queue.push({ time: nextBeatTime, beat, bar });
+				nextBeatTime += 60 / bpm();
+				beat = (beat + 1) % BEATS_PER_BAR;
+				if (beat === 0) bar++;
+			}
+		};
+
+		const setBeat = (active: number) => beats.forEach((el, i) => el.classList.toggle('active', i === active));
+
+		const flush = () => {
+			while (queue.length && queue[0].time <= audio!.currentTime) {
+				const due = queue.shift()!;
+				setBeat(due.beat);
+				if (due.beat === 0) {
+					cardIndex = due.bar;
+					showCard(cardIndex);
+				}
+			}
+		};
+
+		const draw = () => {
+			if (!playing) return;
+			flush();
+			requestAnimationFrame(draw);
+		};
+
+		const start = async () => {
+			playing = true; // set before awaiting so a quick second click stops instead of starting twice
+			audio ??= new AudioContext();
+			await audio.resume();
+			if (!playing) return;
+			beat = 0;
+			bar = 0;
+			queue = [];
+			nextBeatTime = audio.currentTime + 0.1;
+			schedule();
+			timer = window.setInterval(() => {
+				schedule();
+				flush();
+			}, LOOKAHEAD_MS);
+			requestAnimationFrame(draw);
+			toggle.textContent = 'Stop';
+			toggle.classList.add('playing');
+		};
+
+		function stop() {
+			playing = false;
+			window.clearInterval(timer);
+			queue = [];
+			cardIndex = 0;
+			setBeat(-1);
+			showCard(cardIndex);
+			toggle.textContent = 'Start';
+			toggle.classList.remove('playing');
+			renderDeck();
+		}
+
+		toggle.addEventListener('click', () => (playing ? stop() : start()));
+
+		const setBpm = (value: number) => {
+			bpmInput.value = String(value); // the range input clamps to min/max
+			bpmValue.textContent = `${bpmInput.value} BPM`;
+		};
+		bpmInput.addEventListener('input', () => setBpm(bpm()));
+		root.querySelector('[data-slower]')!.addEventListener('click', () => setBpm(bpm() - TEMPO_STEP));
+		root.querySelector('[data-faster]')!.addEventListener('click', () => setBpm(bpm() + TEMPO_STEP));
+
+		showCard(cardIndex);
+		renderDeck();
+	}
+</script>
+
+<style>
+	.player {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 1.25rem;
+		padding: 1.5rem 1rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.75rem;
+		background: var(--sl-color-gray-6);
+	}
+	.placeholder {
+		margin: 2rem 0;
+		color: var(--sl-color-gray-3);
+		text-align: center;
+	}
+	.cards {
+		display: flex;
+		align-items: flex-end;
+		justify-content: center;
+		gap: 2rem;
+		width: 100%;
+	}
+	.cards[hidden] {
+		display: none;
+	}
+	.card {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.card-label {
+		margin: 0;
+		font-size: var(--sl-text-xs);
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+	}
+	.now .card-diagram :global(svg) {
+		width: min(15rem, 55vw);
+		max-width: none;
+	}
+	.now .card-diagram :global(.caption) {
+		font-size: var(--sl-text-3xl);
+	}
+	.next {
+		opacity: 0.7;
+	}
+	.next .card-diagram :global(svg) {
+		width: min(7rem, 25vw);
+	}
+	.beats {
+		display: flex;
+		gap: 0.75rem;
+	}
+	.beat {
+		display: grid;
+		place-items: center;
+		width: 2.25rem;
+		height: 2.25rem;
+		border: 2px solid var(--sl-color-gray-4);
+		border-radius: 50%;
+		font-weight: 700;
+		color: var(--sl-color-gray-3);
+		transition: background 60ms, color 60ms, border-color 60ms;
+	}
+	.beat[data-beat='0'] {
+		border-color: var(--sl-color-accent);
+	}
+	.beat.active {
+		background: var(--sl-color-accent-high);
+		border-color: var(--sl-color-accent-high);
+		color: var(--sl-color-black);
+	}
+	.transport {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: center;
+		gap: 1rem 1.5rem;
+	}
+	button {
+		font: inherit;
+		color: var(--sl-color-white);
+		cursor: pointer;
+	}
+	.play {
+		min-width: 7rem;
+		padding: 0.5rem 1.25rem;
+		border: 0;
+		border-radius: 999px;
+		font-weight: 700;
+		background: var(--sl-color-accent);
+		color: var(--sl-color-black);
+	}
+	.play.playing {
+		background: var(--sl-color-gray-2);
+	}
+	.play:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+	.tempo {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.step {
+		width: 2rem;
+		height: 2rem;
+		border: 1px solid var(--sl-color-gray-4);
+		border-radius: 50%;
+		background: transparent;
+		font-size: var(--sl-text-lg);
+		line-height: 1;
+	}
+	.step:hover {
+		border-color: var(--sl-color-accent);
+	}
+	.tempo input {
+		width: 9rem;
+		accent-color: var(--sl-color-accent);
+	}
+	.tempo output {
+		min-width: 4.5rem;
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.play:focus-visible,
+	.step:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 2px;
+	}
+	.deck {
+		margin: 0;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+		text-align: center;
+	}
+	.deck:empty {
+		display: none;
+	}
+	.pick-heading {
+		margin-top: 2.5rem;
+		font-size: var(--sl-text-h3);
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.pick-help {
+		margin-top: 0.5rem;
+		color: var(--sl-color-gray-2);
+	}
+</style>

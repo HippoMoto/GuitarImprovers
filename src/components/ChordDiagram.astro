@@ -2,14 +2,18 @@
 // Draws a chord chart as an SVG. Usable on its own in any lesson:
 //   <ChordDiagram name="G" frets="320003" fingers="210003" />
 // See src/data/chords.ts for the frets/fingers notation.
+// Use as="span" when the diagram sits inside a button or other inline element.
 
 interface Props {
 	name?: string;
 	frets: string;
 	fingers?: string;
+	as?: 'figure' | 'span';
 }
 
-const { name, frets, fingers = '' } = Astro.props;
+const { name, frets, fingers = '', as = 'figure' } = Astro.props;
+const Wrapper = as;
+const Caption = as === 'figure' ? 'figcaption' : 'span';
 
 const STRINGS = 6;
 const FRETS_SHOWN = 4;
@@ -64,7 +68,7 @@ const description = fretList
 const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
 ---
 
-<figure class="chord-diagram">
+<Wrapper class="chord-diagram">
 	<svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={ariaLabel}>
 		{/* frets */}
 		{Array.from({ length: FRETS_SHOWN + 1 }, (_, n) => (
@@ -106,8 +110,8 @@ const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
 			) : null,
 		)}
 	</svg>
-	{name && <figcaption>{name}</figcaption>}
-</figure>
+	{name && <Caption class="caption">{name}</Caption>}
+</Wrapper>
 
 <style>
 	.chord-diagram {
@@ -151,7 +155,7 @@ const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
 		font-size: 9px;
 		font-family: var(--sl-font-system);
 	}
-	figcaption {
+	.caption {
 		font-weight: 600;
 		font-size: var(--sl-text-lg);
 	}
