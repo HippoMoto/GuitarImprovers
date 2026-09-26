@@ -19,6 +19,7 @@ export default defineConfig({
 				{ label: 'Chord library', slug: 'index' },
 				{ label: 'Chord flashcards', slug: 'flashcards' },
 				{ label: 'Fretboard notes', slug: 'fretboard' },
+				{ label: 'Triads', slug: 'triads' },
 				{
 					label: 'Guides',
 					items: [

@@ -3,15 +3,25 @@
 //   <ChordDiagram name="G" frets="320003" fingers="210003" />
 // See src/data/chords.ts for the frets/fingers notation.
 // Use as="span" when the diagram sits inside a button or other inline element.
+//
+// Optional extras (strings are numbered 0 = low E … 5 = high e):
+//   highlight  only these strings are drawn in full; the rest are faded
+//   roots      notes on these strings are drawn as squares (root notes)
+//   labels     text under each string, e.g. note names ('' for none)
+//   startFret  top fret of the diagram, to line several diagrams up
 
 interface Props {
 	name?: string;
 	frets: string;
 	fingers?: string;
 	as?: 'figure' | 'span';
+	highlight?: number[];
+	roots?: number[];
+	labels?: string[];
+	startFret?: number;
 }
 
-const { name, frets, fingers = '', as = 'figure' } = Astro.props;
+const { name, frets, fingers = '', as = 'figure', highlight, roots = [], labels, startFret } = Astro.props;
 const Wrapper = as;
 const Caption = as === 'figure' ? 'figcaption' : 'span';
 
@@ -35,9 +45,9 @@ if (fingers && fingerList.length !== STRINGS) {
 
 const pressed = fretList.filter((f): f is number => f !== null && f > 0);
 const maxFret = Math.max(0, ...pressed);
-const baseFret = maxFret <= FRETS_SHOWN ? 1 : Math.min(...pressed);
-if (maxFret - baseFret >= FRETS_SHOWN) {
-	throw new Error(`ChordDiagram ${label}: shape spans more than ${FRETS_SHOWN} frets`);
+const baseFret = startFret ?? (maxFret <= FRETS_SHOWN ? 1 : Math.min(...pressed));
+if (maxFret - baseFret >= FRETS_SHOWN || pressed.some((f) => f < baseFret)) {
+	throw new Error(`ChordDiagram ${label}: shape doesn't fit in ${FRETS_SHOWN} frets from fret ${baseFret}`);
 }
 
 // A finger on two or more strings at the same fret is a barre.
@@ -50,6 +60,9 @@ for (const finger of new Set(fingerList.filter((f): f is string => f !== null)))
 	}
 }
 const inBarre = (i: number) => barres.some((b) => fretList[i] === b.fret && fingerList[i] === b.finger);
+const faded = (i: number) => (highlight ? !highlight.includes(i) : false);
+const barreFaded = (b: (typeof barres)[number]) =>
+	highlight ? Array.from({ length: b.to - b.from + 1 }, (_, n) => b.from + n).some(faded) : false;
 
 // Layout
 const LEFT = 22;
@@ -57,7 +70,7 @@ const GAP = 16;
 const TOP = 28;
 const FRET_H = 18;
 const WIDTH = LEFT * 2 + GAP * (STRINGS - 1) - 12;
-const HEIGHT = TOP + FRET_H * FRETS_SHOWN + 6;
+const HEIGHT = TOP + FRET_H * FRETS_SHOWN + (labels ? 18 : 6);
 const sx = (i: number) => LEFT + i * GAP;
 const fy = (fret: number) => TOP + (fret - baseFret + 0.5) * FRET_H;
 const gridBottom = TOP + FRET_H * FRETS_SHOWN;
@@ -86,7 +99,11 @@ const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
 		{/* open and muted markers */}
 		{fretList.map((f, i) =>
 			f === 0 ? (
-				<circle cx={sx(i)} cy={TOP - 11} r="3.8" class="open" />
+				roots.includes(i) ? (
+					<rect x={sx(i) - 4} y={TOP - 15} width="8" height="8" class:list={['open', { faded: faded(i) }]} />
+				) : (
+					<circle cx={sx(i)} cy={TOP - 11} r="3.8" class:list={['open', { faded: faded(i) }]} />
+				)
 			) : f === null ? (
 				<path d={`M${sx(i) - 3.5} ${TOP - 14.5}l7 7m0 -7l-7 7`} class="muted" />
 			) : null,
@@ -94,7 +111,7 @@ const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
 
 		{/* barres */}
 		{barres.map((b) => (
-			<g>
+			<g class:list={{ faded: barreFaded(b) }}>
 				<rect x={sx(b.from) - 6.5} y={fy(b.fret) - 6.5} width={sx(b.to) - sx(b.from) + 13} height="13" rx="6.5" class="dot" />
 				<text x={(sx(b.from) + sx(b.to)) / 2} y={fy(b.fret) + 3.2} text-anchor="middle" class="finger">{b.finger}</text>
 			</g>
@@ -103,10 +120,23 @@ const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
 		{/* fretted notes */}
 		{fretList.map((f, i) =>
 			f && !inBarre(i) ? (
-				<g>
-					<circle cx={sx(i)} cy={fy(f)} r="6.5" class="dot" />
+				<g class:list={{ faded: faded(i) }}>
+					{roots.includes(i) ? (
+						<rect x={sx(i) - 6.5} y={fy(f) - 6.5} width="13" height="13" rx="2" class="dot" />
+					) : (
+						<circle cx={sx(i)} cy={fy(f)} r="6.5" class="dot" />
+					)}
 					{fingerList[i] && <text x={sx(i)} y={fy(f) + 3.2} text-anchor="middle" class="finger">{fingerList[i]}</text>}
 				</g>
+			) : null,
+		)}
+
+		{/* labels under the strings */}
+		{labels?.map((text, i) =>
+			text ? (
+				<text x={sx(i)} y={gridBottom + 13} text-anchor="middle" class:list={['label', { root: roots.includes(i) }]}>
+					{text}
+				</text>
 			) : null,
 		)}
 	</svg>
@@ -149,6 +179,19 @@ const ariaLabel = `${name ? `${name} chord` : 'Chord'}: ${description}`;
 		font-size: 9px;
 		font-weight: 700;
 		font-family: var(--sl-font-system);
+	}
+	.faded {
+		opacity: 0.25;
+	}
+	.label {
+		fill: currentColor;
+		font-size: 9px;
+		font-weight: 600;
+		font-family: var(--sl-font-system);
+	}
+	.label.root {
+		font-weight: 800;
+		text-decoration: underline;
 	}
 	.base-fret {
 		fill: currentColor;
