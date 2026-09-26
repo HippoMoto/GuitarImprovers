@@ -7,6 +7,7 @@
 //
 // The "Find a note" buttons dim every other note and colour each match by its
 // octave. The chosen note is kept in the URL (?note=D) so it can be shared.
+// A collapsible one-octave piano above it is linked to the same selection.
 
 interface Props {
 	tuning?: string[];
@@ -65,12 +66,58 @@ const WIDTH = neckRight + (SIDE - STRING_GAP / 2);
 const HEIGHT = neckBottom + 12;
 const centerX = (sx(0) + sx(strings - 1)) / 2;
 
+// Piano: one octave, C to B.
+const KEY_W = 40;
+const KEY_H = 150;
+const BLACK_W = 24;
+const BLACK_H = 94;
+const PIANO_PAD = 1;
+const whiteKeys = NOTE_IDS.flatMap((id, pitch) => (SHARPS[pitch] === FLATS[pitch] ? [{ id, pitch }] : []));
+const blackKeys = NOTE_IDS.flatMap((id, pitch) => {
+	if (SHARPS[pitch] === FLATS[pitch]) return [];
+	const whiteBefore = whiteKeys.filter((w) => w.pitch < pitch).length; // key sits on the line after this many white keys
+	return [{ id, pitch, x: PIANO_PAD + whiteBefore * KEY_W - BLACK_W / 2 }];
+});
+const PIANO_W = whiteKeys.length * KEY_W + PIANO_PAD * 2;
+
 const fretNumbers = Array.from({ length: frets }, (_, i) => i + 1);
 const tuningNames = tuning.map((n) => n.replace(/-?\d$/, ''));
 const ariaLabel = `Guitar fretboard in ${tuningNames.join(' ')} tuning showing the note at every fret from open to fret ${frets}.`;
 ---
 
 <div class="fretboard-explorer not-content" data-fretboard>
+	<details class="piano-panel">
+		<summary>Piano keyboard</summary>
+		<p class="piano-help">
+			One octave of a piano, from C to B. Each key is the same note name as on the fretboard: tap a key to find that
+			note on the neck.
+		</p>
+		<svg class="piano" viewBox={`0 0 ${PIANO_W} ${KEY_H + PIANO_PAD * 2}`} role="group" aria-label="Piano keyboard, one octave from C to B">
+			{whiteKeys.map((k, i) => (
+				<g class="key white" data-note={k.id} role="button" tabindex="0" aria-pressed="false" aria-label={SHARPS[k.pitch]}>
+					<rect x={PIANO_PAD + i * KEY_W} y={PIANO_PAD} width={KEY_W} height={KEY_H} rx="4" />
+					<text x={PIANO_PAD + i * KEY_W + KEY_W / 2} y={KEY_H - 14} text-anchor="middle">{SHARPS[k.pitch]}</text>
+				</g>
+			))}
+			{blackKeys.map((k) => (
+				<g
+					class="key black"
+					data-note={k.id}
+					role="button"
+					tabindex="0"
+					aria-pressed="false"
+					aria-label={`${SHARPS[k.pitch]} / ${FLATS[k.pitch]}`}
+				>
+					<rect x={k.x} y={PIANO_PAD} width={BLACK_W} height={BLACK_H} rx="3" />
+					<text x={k.x + BLACK_W / 2} text-anchor="middle">
+						<tspan x={k.x + BLACK_W / 2} y={BLACK_H - 22}>{SHARPS[k.pitch]}</tspan>
+						<tspan x={k.x + BLACK_W / 2} y={BLACK_H - 10}>{FLATS[k.pitch]}</tspan>
+					</text>
+				</g>
+			))}
+		</svg>
+	</details>
+
 	<fieldset class="finder">
 		<legend>Find a note <span class="hint">— tap again to show all notes</span></legend>
 		<div class="options">
@@ -158,6 +205,7 @@ const ariaLabel = `Guitar fretboard in ${tuningNames.join(' ')} tuning showing t
 	for (const root of document.querySelectorAll<HTMLElement>('[data-fretboard]')) {
 		const inputs = [...root.querySelectorAll<HTMLInputElement>('input[name="fretboard-note"]')];
 		const notes = [...root.querySelectorAll<SVGGElement>('.note')];
+		const pianoKeys = [...root.querySelectorAll<SVGGElement>('.key')];
 		const legend = root.querySelector<HTMLElement>('[data-legend]')!;
 		const legendItems = root.querySelector<HTMLElement>('[data-legend-items]')!;
 		const summary = root.querySelector<HTMLElement>('[data-summary]')!;
@@ -167,6 +215,10 @@ const ariaLabel = `Guitar fretboard in ${tuningNames.join(' ')} tuning showing t
 
 		const render = () => {
 			for (const input of inputs) input.checked = input.value === selected;
+			for (const key of pianoKeys) {
+				key.classList.toggle('selected', key.dataset.note === selected);
+				key.setAttribute('aria-pressed', String(key.dataset.note === selected));
+			}
 			root.toggleAttribute('data-filtering', selected !== '');
 
 			const matches = notes.filter((n) => n.dataset.note === selected);
@@ -199,11 +251,20 @@ const ariaLabel = `Guitar fretboard in ${tuningNames.join(' ')} tuning showing t
 			history.replaceState(null, '', url);
 		};
 
+		const toggle = (id: string) => {
+			selected = selected === id ? '' : id;
+			render();
+		};
+
 		// Radios can't be un-ticked by clicking, so handle clicks to allow toggling off.
-		for (const input of inputs) {
-			input.addEventListener('click', () => {
-				selected = selected === input.value ? '' : input.value;
-				render();
+		for (const input of inputs) input.addEventListener('click', () => toggle(input.value));
+
+		for (const key of pianoKeys) {
+			key.addEventListener('click', () => toggle(key.dataset.note!));
+			key.addEventListener('keydown', (event) => {
+				if (event.key !== 'Enter' && event.key !== ' ') return;
+				event.preventDefault();
+				toggle(key.dataset.note!);
 			});
 		}
 
@@ -214,9 +275,82 @@ const ariaLabel = `Guitar fretboard in ${tuningNames.join(' ')} tuning showing t
 </script>
 
 <style>
+	/* ---- Piano ---- */
+	.piano-panel {
+		margin-top: 1.5rem;
+		padding: 0.75rem 1rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		background: var(--sl-color-gray-6);
+	}
+	.piano-panel summary {
+		cursor: pointer;
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.piano-panel[open] summary {
+		margin-bottom: 0.5rem;
+	}
+	.piano-help {
+		margin: 0 0 1rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+	}
+	.piano {
+		display: block;
+		width: 100%;
+		max-width: 22rem;
+		height: auto;
+		margin: 0 auto 0.25rem;
+		font-family: var(--sl-font-system);
+	}
+	.key {
+		cursor: pointer;
+		outline: none;
+	}
+	.key rect {
+		stroke: hsl(224, 10%, 35%);
+		stroke-width: 1;
+		transition: fill 120ms;
+	}
+	.key text {
+		font-weight: 700;
+		pointer-events: none;
+	}
+	.white rect {
+		fill: hsl(0, 0%, 98%);
+	}
+	.white:hover rect {
+		fill: hsl(224, 60%, 92%);
+	}
+	.white text {
+		font-size: 14px;
+		fill: hsl(224, 10%, 20%);
+	}
+	.black rect {
+		fill: hsl(224, 10%, 12%);
+	}
+	.black:hover rect {
+		fill: hsl(224, 25%, 28%);
+	}
+	.black text {
+		font-size: 8.5px;
+		fill: hsl(0, 0%, 88%);
+	}
+	.key.selected rect {
+		fill: var(--sl-color-accent);
+	}
+	.key.selected text {
+		fill: hsl(224, 10%, 10%);
+	}
+	.key:focus-visible rect {
+		stroke: var(--sl-color-accent-high);
+		stroke-width: 3;
+	}
+
 	/* ---- Note finder ---- */
 	.finder {
-		margin: 1.5rem 0 0;
+		margin: 1rem 0 0;
 		padding: 1rem;
 		border: 1px solid var(--sl-color-gray-5);
 		border-radius: 0.5rem;
