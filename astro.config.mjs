@@ -7,12 +7,16 @@ export default defineConfig({
 	// Hosted on GitHub Pages at https://hippomoto.github.io/GuitarImprovers/
 	site: 'https://hippomoto.github.io',
 	base: '/GuitarImprovers',
+	// The chord library is the home page; keep its old address working.
+	redirects: {
+		'/chords': '/GuitarImprovers/',
+	},
 	integrations: [
 		starlight({
 			title: 'My Docs',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/withastro/starlight' }],
 			sidebar: [
-				{ label: 'Chord library', slug: 'chords' },
+				{ label: 'Chord library', slug: 'index' },
 				{ label: 'Chord flashcards', slug: 'flashcards' },
 				{ label: 'Fretboard notes', slug: 'fretboard' },
 				{
