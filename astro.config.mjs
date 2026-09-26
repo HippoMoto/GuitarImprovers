@@ -4,6 +4,9 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
+	// Hosted on GitHub Pages at https://hippomoto.github.io/GuitarImprovers/
+	site: 'https://hippomoto.github.io',
+	base: '/GuitarImprovers',
 	integrations: [
 		starlight({
 			title: 'My Docs',
