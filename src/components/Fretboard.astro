@@ -1,34 +1,52 @@
 ---
 // Guitar neck with every note from the open strings to `frets`, drawn as an
 // SVG with the strings running top to bottom (low E on the left). Notes are
-// worked out from the tuning, so a different tuning can be passed in:
-//   <Fretboard tuning={['D', 'A', 'D', 'G', 'B', 'E']} />
+// worked out from the tuning (note name + octave), so a different tuning can
+// be passed in:
+//   <Fretboard tuning={['D2', 'A2', 'D3', 'G3', 'B3', 'E4']} />
+//
+// The "Find a note" buttons dim every other note and colour each match by its
+// octave. The chosen note is kept in the URL (?note=D) so it can be shared.
 
 interface Props {
 	tuning?: string[];
 	frets?: number;
 }
 
-const { tuning = ['E', 'A', 'D', 'G', 'B', 'E'], frets = 12 } = Astro.props;
+const { tuning = ['E2', 'A2', 'D3', 'G3', 'B3', 'E4'], frets = 12 } = Astro.props;
 
 const SHARPS = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const FLATS = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B'];
+const NOTE_IDS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const INLAYS = [3, 5, 7, 9, 15, 17, 19, 21];
 const DOUBLE_INLAYS = [12, 24];
 
-const pitchOf = (name: string) => {
-	const index = SHARPS.indexOf(name.replace('#', '♯'));
-	return index >= 0 ? index : FLATS.indexOf(name.replace('b', '♭'));
+// Semitones above C0, e.g. "E2" → 28.
+const semitonesOf = (note: string) => {
+	const match = note.match(/^([A-G])([#b♯♭]?)(-?\d)$/);
+	if (!match) throw new Error(`Fretboard: tuning notes need an octave, like "E2" (got "${note}")`);
+	const [, letter, accidental, octave] = match;
+	const offset = accidental === '#' || accidental === '♯' ? 1 : accidental ? -1 : 0;
+	return Number(octave) * 12 + SHARPS.indexOf(letter) + offset;
 };
-const openPitches = tuning.map((name) => {
-	const pitch = pitchOf(name);
-	if (pitch < 0) throw new Error(`Fretboard: unknown note "${name}" in tuning`);
-	return pitch;
-});
+const openSemitones = tuning.map(semitonesOf);
+
 const noteAt = (string: number, fret: number) => {
-	const pitch = (openPitches[string] + fret) % 12;
-	return { sharp: SHARPS[pitch], flat: FLATS[pitch], natural: SHARPS[pitch] === FLATS[pitch] };
+	const semitones = openSemitones[string] + fret;
+	const pitch = ((semitones % 12) + 12) % 12;
+	return {
+		id: NOTE_IDS[pitch],
+		sharp: SHARPS[pitch],
+		flat: FLATS[pitch],
+		natural: SHARPS[pitch] === FLATS[pitch],
+		octave: Math.floor(semitones / 12),
+	};
 };
+
+// Octave colours, lowest to highest. Anything beyond the list reuses the last colour.
+const OCTAVE_HUES = ['purple', 'red', 'orange', 'green'];
+const lowestOctave = Math.min(...openSemitones.map((s) => Math.floor(s / 12)));
+const hueFor = (octave: number) => OCTAVE_HUES[Math.min(octave - lowestOctave, OCTAVE_HUES.length - 1)];
 
 // Layout
 const STRING_GAP = 48;
@@ -48,66 +66,284 @@ const HEIGHT = neckBottom + 12;
 const centerX = (sx(0) + sx(strings - 1)) / 2;
 
 const fretNumbers = Array.from({ length: frets }, (_, i) => i + 1);
-const ariaLabel = `Guitar fretboard in ${tuning.join(' ')} tuning showing the note at every fret from open to fret ${frets}.`;
+const tuningNames = tuning.map((n) => n.replace(/-?\d$/, ''));
+const ariaLabel = `Guitar fretboard in ${tuningNames.join(' ')} tuning showing the note at every fret from open to fret ${frets}.`;
 ---
 
-<figure class="fretboard not-content">
-	<svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={ariaLabel}>
-		<rect x={neckLeft} y={NUT_Y} width={neckRight - neckLeft} height={neckBottom - NUT_Y} rx="4" class="neck" />
+<div class="fretboard-explorer not-content" data-fretboard>
+	<fieldset class="finder">
+		<legend>Find a note <span class="hint">— tap again to show all notes</span></legend>
+		<div class="options">
+			{NOTE_IDS.map((id, pitch) => (
+				<label class="chip">
+					<input type="radio" name="fretboard-note" value={id} />
+					<span>{SHARPS[pitch] === FLATS[pitch] ? SHARPS[pitch] : `${SHARPS[pitch]}/${FLATS[pitch]}`}</span>
+				</label>
+			))}
+		</div>
+		<div class="legend" data-legend hidden>
+			<span class="legend-title">Same colour = same octave:</span>
+			<ul data-legend-items></ul>
+		</div>
+		<p class="summary" aria-live="polite" data-summary></p>
+	</fieldset>
 
-		{/* position dots */}
-		{fretNumbers.filter((f) => INLAYS.includes(f)).map((f) => (
-			<circle cx={centerX} cy={fy(f)} r="5" class="inlay" />
-		))}
-		{fretNumbers.filter((f) => DOUBLE_INLAYS.includes(f)).map((f) => (
-			<g>
-				<circle cx={(sx(1) + sx(2)) / 2} cy={fy(f)} r="5" class="inlay" />
-				<circle cx={(sx(3) + sx(4)) / 2} cy={fy(f)} r="5" class="inlay" />
-			</g>
-		))}
+	<figure class="fretboard">
+		<svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={ariaLabel}>
+			<rect x={neckLeft} y={NUT_Y} width={neckRight - neckLeft} height={neckBottom - NUT_Y} rx="4" class="neck" />
 
-		{/* frets and strings */}
-		{fretNumbers.map((f) => (
-			<line x1={neckLeft} x2={neckRight} y1={NUT_Y + f * FRET_H} y2={NUT_Y + f * FRET_H} class="fret" />
-		))}
-		<rect x={neckLeft} y={NUT_Y - 3} width={neckRight - neckLeft} height="6" rx="2" class="nut" />
-		{tuning.map((_, s) => (
-			<line x1={sx(s)} x2={sx(s)} y1={NUT_Y} y2={neckBottom} class="string" style={`stroke-width: ${2.2 - s * 0.25}`} />
-		))}
+			{/* position dots */}
+			{fretNumbers.filter((f) => INLAYS.includes(f)).map((f) => (
+				<circle cx={centerX} cy={fy(f)} r="5" class="inlay" />
+			))}
+			{fretNumbers.filter((f) => DOUBLE_INLAYS.includes(f)).map((f) => (
+				<g>
+					<circle cx={(sx(1) + sx(2)) / 2} cy={fy(f)} r="5" class="inlay" />
+					<circle cx={(sx(3) + sx(4)) / 2} cy={fy(f)} r="5" class="inlay" />
+				</g>
+			))}
 
-		{/* fret numbers on both sides */}
-		{fretNumbers.map((f) => (
-			<g class="fret-number">
-				<text x={neckLeft - 12} y={fy(f) + 4} text-anchor="end">{f}</text>
-				<text x={neckRight + 12} y={fy(f) + 4} text-anchor="start">{f}</text>
-			</g>
-		))}
+			{/* frets and strings */}
+			{fretNumbers.map((f) => (
+				<line x1={neckLeft} x2={neckRight} y1={NUT_Y + f * FRET_H} y2={NUT_Y + f * FRET_H} class="fret" />
+			))}
+			<rect x={neckLeft} y={NUT_Y - 3} width={neckRight - neckLeft} height="6" rx="2" class="nut" />
+			{tuning.map((_, s) => (
+				<line x1={sx(s)} x2={sx(s)} y1={NUT_Y} y2={neckBottom} class="string" style={`stroke-width: ${2.2 - s * 0.25}`} />
+			))}
 
-		{/* notes */}
-		{[0, ...fretNumbers].map((f) =>
-			tuning.map((_, s) => {
-				const note = noteAt(s, f);
-				const kind = f === 0 ? 'open' : note.natural ? 'natural' : 'accidental';
-				return (
-					<g class:list={['note', kind]}>
-						<circle cx={sx(s)} cy={fy(f)} r={R} />
-						{note.natural ? (
-							<text x={sx(s)} y={fy(f) + 5.5} text-anchor="middle" class="name">{note.sharp}</text>
-						) : (
-							<text x={sx(s)} text-anchor="middle" class="name-pair">
-								<tspan x={sx(s)} y={fy(f) - 2}>{note.sharp}</tspan>
-								<tspan x={sx(s)} y={fy(f) + 9}>{note.flat}</tspan>
-							</text>
-						)}
-					</g>
-				);
-			}),
-		)}
-	</svg>
-	<figcaption>Standard tuning, frets 0–{frets}. The pattern repeats from fret {frets} onwards, one octave higher.</figcaption>
-</figure>
+			{/* fret numbers on both sides */}
+			{fretNumbers.map((f) => (
+				<g class="fret-number">
+					<text x={neckLeft - 12} y={fy(f) + 4} text-anchor="end">{f}</text>
+					<text x={neckRight + 12} y={fy(f) + 4} text-anchor="start">{f}</text>
+				</g>
+			))}
+
+			{/* notes */}
+			{[0, ...fretNumbers].map((f) =>
+				tuning.map((_, s) => {
+					const note = noteAt(s, f);
+					const kind = f === 0 ? 'open' : note.natural ? 'natural' : 'accidental';
+					return (
+						<g
+							class:list={['note', kind, `hue-${hueFor(note.octave)}`]}
+							data-note={note.id}
+							data-octave={note.octave}
+							data-hue={hueFor(note.octave)}
+						>
+							<circle cx={sx(s)} cy={fy(f)} r={R} />
+							{note.natural ? (
+								<text x={sx(s)} y={fy(f) + 5.5} text-anchor="middle" class="name">{note.sharp}</text>
+							) : (
+								<text x={sx(s)} text-anchor="middle" class="name-pair">
+									<tspan x={sx(s)} y={fy(f) - 2}>{note.sharp}</tspan>
+									<tspan x={sx(s)} y={fy(f) + 9}>{note.flat}</tspan>
+								</text>
+							)}
+							<g class="octave-badge">
+								<circle cx={sx(s) + 14} cy={fy(f) - 14} r="7.5" />
+								<text x={sx(s) + 14} y={fy(f) - 10.5} text-anchor="middle">{note.octave}</text>
+							</g>
+						</g>
+					);
+				}),
+			)}
+		</svg>
+		<figcaption>Standard tuning, frets 0–{frets}. The pattern repeats from fret {frets} onwards, one octave higher.</figcaption>
+	</figure>
+</div>
+
+<script>
+	for (const root of document.querySelectorAll<HTMLElement>('[data-fretboard]')) {
+		const inputs = [...root.querySelectorAll<HTMLInputElement>('input[name="fretboard-note"]')];
+		const notes = [...root.querySelectorAll<SVGGElement>('.note')];
+		const legend = root.querySelector<HTMLElement>('[data-legend]')!;
+		const legendItems = root.querySelector<HTMLElement>('[data-legend-items]')!;
+		const summary = root.querySelector<HTMLElement>('[data-summary]')!;
+		let selected = '';
+
+		const labelFor = (id: string) => inputs.find((i) => i.value === id)!.nextElementSibling!.textContent!;
+
+		const render = () => {
+			for (const input of inputs) input.checked = input.value === selected;
+			root.toggleAttribute('data-filtering', selected !== '');
+
+			const matches = notes.filter((n) => n.dataset.note === selected);
+			for (const note of notes) note.classList.toggle('match', note.dataset.note === selected);
+
+			// One legend entry per octave the note appears in, lowest first.
+			const octaves = new Map<number, string>();
+			for (const m of matches) octaves.set(Number(m.dataset.octave), m.dataset.hue!);
+			const sorted = [...octaves].sort(([a], [b]) => a - b);
+			const name = selected ? labelFor(selected) : '';
+			legendItems.replaceChildren(
+				...sorted.map(([octave, hue], i) => {
+					const li = document.createElement('li');
+					const count = matches.filter((m) => Number(m.dataset.octave) === octave).length;
+					li.innerHTML = `<span class="swatch hue-${hue}">${octave}</span>`;
+					li.append(
+						`${name.split('/')[0]}${octave}${i === 0 ? ' (lowest)' : i === sorted.length - 1 ? ' (highest)' : ''} · ${count}×`,
+					);
+					return li;
+				}),
+			);
+			legend.hidden = !selected;
+			summary.textContent = selected
+				? `${name} appears ${matches.length} times, in ${sorted.length} different octaves.`
+				: '';
+
+			const url = new URL(location.href);
+			if (selected) url.searchParams.set('note', selected);
+			else url.searchParams.delete('note');
+			history.replaceState(null, '', url);
+		};
+
+		// Radios can't be un-ticked by clicking, so handle clicks to allow toggling off.
+		for (const input of inputs) {
+			input.addEventListener('click', () => {
+				selected = selected === input.value ? '' : input.value;
+				render();
+			});
+		}
+
+		const fromUrl = new URLSearchParams(location.search).get('note');
+		if (fromUrl && inputs.some((i) => i.value === fromUrl)) selected = fromUrl;
+		render();
+	}
+</script>
 
 <style>
+	/* ---- Note finder ---- */
+	.finder {
+		margin: 1.5rem 0 0;
+		padding: 1rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		background: var(--sl-color-gray-6);
+	}
+	legend {
+		float: left;
+		width: 100%;
+		margin-bottom: 0.5rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.hint {
+		font-weight: 400;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+	}
+	.options {
+		clear: both;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+	.chip {
+		position: relative;
+		cursor: pointer;
+	}
+	.chip input {
+		position: absolute;
+		opacity: 0;
+		inset: 0;
+		margin: 0;
+		cursor: pointer;
+	}
+	.chip span {
+		display: inline-block;
+		padding: 0.3rem 0.8rem;
+		border: 1px solid var(--sl-color-gray-4);
+		border-radius: 999px;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+		user-select: none;
+	}
+	.chip:hover span {
+		border-color: var(--sl-color-accent);
+	}
+	.chip input:checked + span {
+		background: var(--sl-color-accent-low);
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-accent-high);
+		font-weight: 600;
+	}
+	.chip input:focus-visible + span {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 2px;
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 1rem;
+		margin-top: 1rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+	}
+	.legend[hidden] {
+		display: none;
+	}
+	.legend-title {
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.legend ul {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.legend li {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+	.legend :global(.swatch) {
+		display: inline-grid;
+		place-items: center;
+		width: 1.4rem;
+		height: 1.4rem;
+		border-radius: 50%;
+		font-size: var(--sl-text-xs);
+		font-weight: 700;
+		color: var(--ink);
+		background: var(--octave);
+	}
+	.summary {
+		margin: 0.75rem 0 0;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	.summary:empty {
+		display: none;
+	}
+
+	/* ---- Octave colours (shared by the fretboard and the legend) ---- */
+	.fretboard-explorer {
+		--ink: hsl(224, 10%, 10%);
+	}
+	.fretboard-explorer :global(.hue-purple) {
+		--octave: var(--sl-color-purple);
+		--octave-edge: var(--sl-color-purple-high);
+	}
+	.fretboard-explorer :global(.hue-red) {
+		--octave: var(--sl-color-red);
+		--octave-edge: var(--sl-color-red-high);
+	}
+	.fretboard-explorer :global(.hue-orange) {
+		--octave: var(--sl-color-orange);
+		--octave-edge: var(--sl-color-orange-high);
+	}
+	.fretboard-explorer :global(.hue-green) {
+		--octave: var(--sl-color-green);
+		--octave-edge: var(--sl-color-green-high);
+	}
+
+	/* ---- Fretboard ---- */
 	.fretboard {
 		margin: 1.5rem auto 0;
 		max-width: 26rem;
@@ -142,8 +378,12 @@ const ariaLabel = `Guitar fretboard in ${tuning.join(' ')} tuning showing the no
 		fill: var(--sl-color-gray-3);
 		font-size: 12px;
 	}
-	.note circle {
+	.note {
+		transition: opacity 150ms;
+	}
+	.note > circle {
 		stroke-width: 2;
+		transition: fill 150ms, stroke 150ms;
 	}
 	.note text {
 		font-weight: 700;
@@ -154,26 +394,54 @@ const ariaLabel = `Guitar fretboard in ${tuning.join(' ')} tuning showing the no
 	.name-pair {
 		font-size: 10px;
 	}
-	.natural circle {
+	.natural > circle {
 		fill: var(--sl-color-accent-low);
 		stroke: var(--sl-color-accent);
 	}
-	.natural text {
+	.natural > text {
 		fill: var(--sl-color-white);
 	}
-	.accidental circle {
+	.accidental > circle {
 		fill: var(--sl-color-black);
 		stroke: var(--sl-color-gray-4);
 	}
-	.accidental text {
+	.accidental > text {
 		fill: var(--sl-color-gray-2);
 	}
-	.open circle {
+	.open > circle {
 		fill: var(--sl-color-accent-high);
 		stroke: var(--sl-color-accent-high);
 	}
-	.open text {
+	.open > text {
 		fill: var(--sl-color-black);
+	}
+
+	/* Filtering: dim the rest, colour the matches by octave. */
+	.octave-badge {
+		display: none;
+	}
+	[data-filtering] .note:not(.match) {
+		opacity: 0.18;
+	}
+	[data-filtering] .match > circle {
+		fill: var(--octave);
+		stroke: var(--octave-edge);
+		stroke-width: 3;
+	}
+	[data-filtering] .match > text {
+		fill: var(--ink);
+	}
+	[data-filtering] .match .octave-badge {
+		display: inline;
+	}
+	.octave-badge circle {
+		fill: var(--sl-color-black);
+		stroke: var(--octave);
+		stroke-width: 2;
+	}
+	.octave-badge text {
+		font-size: 10px;
+		fill: var(--sl-color-white);
 	}
 	figcaption {
 		font-size: var(--sl-text-sm);
