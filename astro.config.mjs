@@ -11,6 +11,7 @@ export default defineConfig({
 			sidebar: [
 				{ label: 'Chord library', slug: 'chords' },
 				{ label: 'Chord flashcards', slug: 'flashcards' },
+				{ label: 'Fretboard notes', slug: 'fretboard' },
 				{
 					label: 'Guides',
 					items: [

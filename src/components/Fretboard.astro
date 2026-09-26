@@ -1,0 +1,183 @@
+---
+// Guitar neck with every note from the open strings to `frets`, drawn as an
+// SVG with the strings running top to bottom (low E on the left). Notes are
+// worked out from the tuning, so a different tuning can be passed in:
+//   <Fretboard tuning={['D', 'A', 'D', 'G', 'B', 'E']} />
+
+interface Props {
+	tuning?: string[];
+	frets?: number;
+}
+
+const { tuning = ['E', 'A', 'D', 'G', 'B', 'E'], frets = 12 } = Astro.props;
+
+const SHARPS = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+const FLATS = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B'];
+const INLAYS = [3, 5, 7, 9, 15, 17, 19, 21];
+const DOUBLE_INLAYS = [12, 24];
+
+const pitchOf = (name: string) => {
+	const index = SHARPS.indexOf(name.replace('#', '♯'));
+	return index >= 0 ? index : FLATS.indexOf(name.replace('b', '♭'));
+};
+const openPitches = tuning.map((name) => {
+	const pitch = pitchOf(name);
+	if (pitch < 0) throw new Error(`Fretboard: unknown note "${name}" in tuning`);
+	return pitch;
+});
+const noteAt = (string: number, fret: number) => {
+	const pitch = (openPitches[string] + fret) % 12;
+	return { sharp: SHARPS[pitch], flat: FLATS[pitch], natural: SHARPS[pitch] === FLATS[pitch] };
+};
+
+// Layout
+const STRING_GAP = 48;
+const FRET_H = 48;
+const R = 17;
+const SIDE = 60;
+const OPEN_Y = 30;
+const NUT_Y = 60;
+const strings = tuning.length;
+const sx = (s: number) => SIDE + s * STRING_GAP;
+const fy = (fret: number) => (fret === 0 ? OPEN_Y : NUT_Y + (fret - 0.5) * FRET_H);
+const neckLeft = sx(0) - STRING_GAP / 2;
+const neckRight = sx(strings - 1) + STRING_GAP / 2;
+const neckBottom = NUT_Y + frets * FRET_H;
+const WIDTH = neckRight + (SIDE - STRING_GAP / 2);
+const HEIGHT = neckBottom + 12;
+const centerX = (sx(0) + sx(strings - 1)) / 2;
+
+const fretNumbers = Array.from({ length: frets }, (_, i) => i + 1);
+const ariaLabel = `Guitar fretboard in ${tuning.join(' ')} tuning showing the note at every fret from open to fret ${frets}.`;
+---
+
+<figure class="fretboard not-content">
+	<svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={ariaLabel}>
+		<rect x={neckLeft} y={NUT_Y} width={neckRight - neckLeft} height={neckBottom - NUT_Y} rx="4" class="neck" />
+
+		{/* position dots */}
+		{fretNumbers.filter((f) => INLAYS.includes(f)).map((f) => (
+			<circle cx={centerX} cy={fy(f)} r="5" class="inlay" />
+		))}
+		{fretNumbers.filter((f) => DOUBLE_INLAYS.includes(f)).map((f) => (
+			<g>
+				<circle cx={(sx(1) + sx(2)) / 2} cy={fy(f)} r="5" class="inlay" />
+				<circle cx={(sx(3) + sx(4)) / 2} cy={fy(f)} r="5" class="inlay" />
+			</g>
+		))}
+
+		{/* frets and strings */}
+		{fretNumbers.map((f) => (
+			<line x1={neckLeft} x2={neckRight} y1={NUT_Y + f * FRET_H} y2={NUT_Y + f * FRET_H} class="fret" />
+		))}
+		<rect x={neckLeft} y={NUT_Y - 3} width={neckRight - neckLeft} height="6" rx="2" class="nut" />
+		{tuning.map((_, s) => (
+			<line x1={sx(s)} x2={sx(s)} y1={NUT_Y} y2={neckBottom} class="string" style={`stroke-width: ${2.2 - s * 0.25}`} />
+		))}
+
+		{/* fret numbers on both sides */}
+		{fretNumbers.map((f) => (
+			<g class="fret-number">
+				<text x={neckLeft - 12} y={fy(f) + 4} text-anchor="end">{f}</text>
+				<text x={neckRight + 12} y={fy(f) + 4} text-anchor="start">{f}</text>
+			</g>
+		))}
+
+		{/* notes */}
+		{[0, ...fretNumbers].map((f) =>
+			tuning.map((_, s) => {
+				const note = noteAt(s, f);
+				const kind = f === 0 ? 'open' : note.natural ? 'natural' : 'accidental';
+				return (
+					<g class:list={['note', kind]}>
+						<circle cx={sx(s)} cy={fy(f)} r={R} />
+						{note.natural ? (
+							<text x={sx(s)} y={fy(f) + 5.5} text-anchor="middle" class="name">{note.sharp}</text>
+						) : (
+							<text x={sx(s)} text-anchor="middle" class="name-pair">
+								<tspan x={sx(s)} y={fy(f) - 2}>{note.sharp}</tspan>
+								<tspan x={sx(s)} y={fy(f) + 9}>{note.flat}</tspan>
+							</text>
+						)}
+					</g>
+				);
+			}),
+		)}
+	</svg>
+	<figcaption>Standard tuning, frets 0–{frets}. The pattern repeats from fret {frets} onwards, one octave higher.</figcaption>
+</figure>
+
+<style>
+	.fretboard {
+		margin: 1.5rem auto 0;
+		max-width: 26rem;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	svg {
+		width: 100%;
+		height: auto;
+		font-family: var(--sl-font-system);
+	}
+	.neck {
+		fill: var(--sl-color-gray-6);
+		stroke: var(--sl-color-gray-5);
+	}
+	.inlay {
+		fill: var(--sl-color-gray-5);
+	}
+	.fret {
+		stroke: var(--sl-color-gray-4);
+		stroke-width: 2;
+	}
+	.nut {
+		fill: var(--sl-color-gray-2);
+	}
+	.string {
+		stroke: var(--sl-color-gray-3);
+	}
+	.fret-number text {
+		fill: var(--sl-color-gray-3);
+		font-size: 12px;
+	}
+	.note circle {
+		stroke-width: 2;
+	}
+	.note text {
+		font-weight: 700;
+	}
+	.name {
+		font-size: 16px;
+	}
+	.name-pair {
+		font-size: 10px;
+	}
+	.natural circle {
+		fill: var(--sl-color-accent-low);
+		stroke: var(--sl-color-accent);
+	}
+	.natural text {
+		fill: var(--sl-color-white);
+	}
+	.accidental circle {
+		fill: var(--sl-color-black);
+		stroke: var(--sl-color-gray-4);
+	}
+	.accidental text {
+		fill: var(--sl-color-gray-2);
+	}
+	.open circle {
+		fill: var(--sl-color-accent-high);
+		stroke: var(--sl-color-accent-high);
+	}
+	.open text {
+		fill: var(--sl-color-black);
+	}
+	figcaption {
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+		text-align: center;
+	}
+</style>
